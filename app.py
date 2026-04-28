@@ -1,9 +1,7 @@
+import os
+import time
 from flask import Flask, request, jsonify, send_from_directory
-import os, time, sys
-from pptx import Presentation
-from pptx.util import Inches
-import fitz  # PyMuPDF
-
+import aspose.slides as slides 
 app = Flask(__name__)
 
 BASE_DIR = "/home/ozge/mysite"
