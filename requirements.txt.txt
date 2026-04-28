@@ -1,0 +1,3 @@
+Flask
+aspose-slides
+gunicorn
