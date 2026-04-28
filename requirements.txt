@@ -1,3 +1,3 @@
-Flask
+Flask==3.0.0
 aspose-slides
-gunicorn
+gunicorn==21.2.0
