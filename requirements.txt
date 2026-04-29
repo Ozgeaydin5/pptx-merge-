@@ -1,3 +1,4 @@
 Flask
 aspose-slides
 gunicorn
+requests
