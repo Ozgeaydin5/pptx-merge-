@@ -1,71 +1,69 @@
+from flask import Flask, request, jsonify
+import requests
+from pptx import Presentation
+import io
 import os
-import time
-import gc
-from flask import Flask, request, jsonify, send_from_directory
-import aspose.slides as slides
 
 app = Flask(__name__)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(BASE_DIR, "static")
-PROJECT_DIR = os.path.join(BASE_DIR, "project")
+def copy_slides(src, dest):
+    """Önceki uygulamadaki slayt kopyalama mantığını koruyoruz."""
+    for slide in src.slides:
+        # Slayt düzenini (layout) hedef sunuma uydurarak ekle
+        slide_layout = dest.slide_layouts[src.slide_layouts.index(slide.slide_layout)]
+        new_slide = dest.slides.add_slide(slide_layout)
+        
+        # Slayt üzerindeki her bir objeyi (şekil, metin vb.) kopyala
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                new_shape = new_slide.shapes.add_textbox(shape.left, shape.top, shape.width, shape.height)
+                new_shape.text = shape.text
+            # Resim veya grafik varsa burada genişletilebilir
 
-os.makedirs(STATIC_DIR, exist_ok=True)
-os.makedirs(PROJECT_DIR, exist_ok=True)
-
-@app.route("/")
-def home():
-    return "API Online ve Calisiyor!"
-
-@app.route("/merge", methods=["POST"])
+@app.route('/merge', methods=['POST'])
 def merge_pptx():
-    main_pres = None
     try:
-        files = request.files.getlist("files")
-        if not files or len(files) < 2:
-            return jsonify({"error": "En az 2 dosya gerekli"}), 400
+        data = request.get_json()
+        # NocoBase'den gelen "urls" listesini yakala
+        urls = data.get('urls', [])
 
-        first_file = files[0]
-        first_path = os.path.join(PROJECT_DIR, first_file.filename)
-        first_file.save(first_path)
-        
-        # Ana sunumu aç
-        main_pres = slides.Presentation(first_path)
-        
-        for f in files[1:]:
-            if f.filename:
-                temp_path = os.path.join(PROJECT_DIR, f.filename)
-                f.save(temp_path)
-                
-                with slides.Presentation(temp_path) as src_pres:
-                    for slide in src_pres.slides:
-                        main_pres.slides.add_clone(slide)
-                
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-        
-        output_name = f"sunum_{int(time.time())}.pptx"
-        save_path = os.path.join(STATIC_DIR, output_name)
-        main_pres.save(save_path, slides.export.SaveFormat.PPTX)
+        if not urls or not isinstance(urls, list):
+            return jsonify({"error": "Dosya listesi boş veya hatalı formatta"}), 400
 
+        # Ana sunumu oluştur (İlk sunumu temel alabilirsin veya boş başlatabilirsin)
+        merged_pptx = Presentation()
+        # İlk boş slaytı sil (Yeni sunum oluştururken default gelen)
+        if len(merged_pptx.slides) > 0:
+            xml_slides = merged_pptx.slides._slim_elements
+            del xml_slides[0]
+
+        for url in urls:
+            response = requests.get(url)
+            if response.status_code == 200:
+                pptx_file = io.BytesIO(response.content)
+                current_pptx = Presentation(pptx_file)
+                # Kopyalama fonksiyonunu çağır
+                copy_slides(current_pptx, merged_pptx)
+            else:
+                print(f"Hata: {url} indirilemedi.")
+
+        # Birleşmiş dosyayı belleğe kaydet
+        output = io.BytesIO()
+        merged_pptx.save(output)
+        output.seek(0)
+
+        # --- BURASI ÖNEMLİ ---
+        # Dosyayı NocoBase'e geri göndermek için bir yere upload etmen gerekir.
+        # Eğer bir storage kullanmıyorsan, NocoBase bu dosyayı URL olarak bekler.
+        # Geçici olarak bir dosya servisi veya kendi sunucunu kullanabilirsin.
+        # Örnek dönüş:
         return jsonify({
-            "status": "success",
-            "indir": f"https://{request.host}/static/{output_name}"
+            "output_url": "BIRLESEN_DOSYA_LINKI_BURAYA_GELECEK"
         }), 200
 
     except Exception as e:
-        print(f"Hata olustu: {str(e)}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        # Hatalı olan .dispose() yerine nesneyi siliyoruz
-        if main_pres:
-            del main_pres
-        gc.collect() 
 
-@app.route('/static/<path:path>')
-def send_static(path):
-    return send_from_directory(STATIC_DIR, path)
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
