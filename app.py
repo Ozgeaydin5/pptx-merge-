@@ -1,69 +1,76 @@
 import os
-import io
+import time
+import gc
 import requests
-import uuid
+import io
 from flask import Flask, request, jsonify, send_from_directory
-from pptx import Presentation
+import aspose.slides as slides
 
 app = Flask(__name__)
 
-# Dosyaların geçici olarak tutulacağı klasör
-UPLOAD_FOLDER = 'merged_files'
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+os.makedirs(STATIC_DIR, exist_ok=True)
 
-def copy_slides(src_pres, dest_pres):
-    """Eski sistemdeki slayt kopyalama mantığını koruyoruz."""
-    for slide in src_pres.slides:
-        slide_layout = dest_pres.slide_layouts[0] # Basitlik için ilk layout seçildi
-        new_slide = dest_pres.slides.add_slide(slide_layout)
-        for shape in slide.shapes:
-            if shape.has_text_frame:
-                new_shape = new_slide.shapes.add_textbox(shape.left, shape.top, shape.width, shape.height)
-                new_shape.text = shape.text
-            # Resim kopyalama vb. özellikler buraya eklenebilir
+@app.route("/")
+def home():
+    return "Aspose PPTX Merger Online!"
 
-@app.route('/merge', methods=['POST'])
+@app.route("/merge", methods=["POST"])
 def merge_pptx():
+    main_pres = None
     try:
+        # NocoBase'den gelen JSON verisini alıyoruz
         data = request.get_json()
         urls = data.get('urls', [])
 
-        if not urls:
-            return jsonify({"error": "Dosya listesi gelmedi"}), 400
+        if not urls or len(urls) < 1:
+            return jsonify({"error": "Birleştirilecek dosya bulunamadı"}), 400
 
-        # Birleştirme işlemini başlat
-        merged_pres = Presentation()
-        # Boş başlatılan sunumun ilk slaytını temizle
-        xml_slides = merged_pres.slides._slim_elements
-        if len(xml_slides) > 0:
-            del xml_slides[0]
+        # 1. İLK DOSYAYI İNDİR VE ANA SUNUMU OLUŞTUR
+        first_resp = requests.get(urls[0])
+        if first_resp.status_code != 200:
+            return jsonify({"error": "İlk dosya indirilemedi"}), 400
+        
+        # Bellek üzerinden Aspose Presentation objesini oluştur
+        first_stream = io.BytesIO(first_resp.content)
+        main_pres = slides.Presentation(first_stream)
 
-        for url in urls:
+        # 2. DİĞER TÜM URL'LERİ DÖNGÜYLE EKLE
+        for url in urls[1:]:
             resp = requests.get(url)
             if resp.status_code == 200:
-                current_pres = Presentation(io.BytesIO(resp.content))
-                copy_slides(current_pres, merged_pres)
+                with slides.Presentation(io.BytesIO(resp.content)) as src_pres:
+                    for slide in src_pres.slides:
+                        # Aspose'un meşhur add_clone metodu (Bozulma yapmaz)
+                        main_pres.slides.add_clone(slide)
+            else:
+                print(f"Uyarı: {url} indirilemedi, atlanıyor.")
 
-        # Benzersiz bir dosya adı oluştur
-        file_name = f"merged_{uuid.uuid4().hex}.pptx"
-        file_path = os.path.join(UPLOAD_FOLDER, file_name)
-        merged_pres.save(file_path)
+        # 3. KAYDETME
+        output_name = f"birlesmis_hafta_{int(time.time())}.pptx"
+        save_path = os.path.join(STATIC_DIR, output_name)
+        main_pres.save(save_path, slides.export.SaveFormat.PPTX)
 
-        # NocoBase'in bu dosyayı indirebilmesi için Render URL'ini dönüyoruz
-        # Render linkini (https://projeniz.onrender.com) çevre değişkeninden al veya manuel yaz
-        base_url = request.host_url.rstrip('/') 
-        output_url = f"{base_url}/download/{file_name}"
-
-        return jsonify({"output_url": output_url}), 200
+        # NocoBase'in 'Update Record' düğümü için linki döndür
+        return jsonify({
+            "status": "success",
+            "output_url": f"https://{request.host}/static/{output_name}"
+        }), 200
 
     except Exception as e:
+        print(f"Hata olustu: {str(e)}")
         return jsonify({"error": str(e)}), 500
+    finally:
+        # Bellek temizliği (GC ve silme)
+        if main_pres:
+            del main_pres
+        gc.collect()
 
-@app.route('/download/<filename>')
-def download_file(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename)
+@app.route('/static/<path:path>')
+def send_static(path):
+    return send_from_directory(STATIC_DIR, path)
 
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
