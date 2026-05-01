@@ -57,10 +57,13 @@ def merge_pptx():
         print(f"Hata olustu: {str(e)}")
         return jsonify({"error": str(e)}), 500
     finally:
-        # Hatalı olan .dispose() yerine nesneyi siliyoruz
         if main_pres:
+            try:
+                main_pres.dispose() # del yerine dispose() kullanmaya çalış
+            except:
+                pass
             del main_pres
-        gc.collect() 
+        gc.collect() # Belleği temizlemeye zorla
 
 @app.route('/static/<path:path>')
 def send_static(path):
