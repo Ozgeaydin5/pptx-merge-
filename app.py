@@ -19,12 +19,26 @@ def home():
 
 @app.route("/merge", methods=["POST"])
 @app.route("/merge", methods=["POST"])
+@app.route("/merge", methods=["POST"])
 def merge_pptx():
-    main_pres = None
-    try:
-        files = request.files.getlist("files")
-        if not files or len(files) < 2:
-            return jsonify({"error": "En az 2 dosya gerekli"}), 400
+    urls = []
+    # 1. Yöntem: Eğer NocoBase JSON gönderirse
+    if request.is_json:
+        data = request.json
+        if isinstance(data, list):
+            for record in data:
+                sunumlar = record.get('sunumlar', [])
+                for s in sunumlar:
+                    if s.get('url'): urls.append(s['url'])
+    
+    # 2. Yöntem: Eğer NocoBase Form-data gönderirse
+    else:
+        urls = request.form.getlist('files')
+
+    if len(urls) < 2:
+        return jsonify({"error": f"Hata: En az 2 dosya lazım. Sistem {len(urls)} dosya bulabildi."}), 400
+
+    # ... (Geri kalan indirme ve birleştirme kodun aynı)
         first_file = files[0]
         first_path = os.path.join(PROJECT_DIR, first_file.filename)
         first_file.save(first_path)
