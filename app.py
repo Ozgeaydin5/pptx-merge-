@@ -1,83 +1,74 @@
 import os
-import requests
-from flask import Flask, request, jsonify, send_from_directory
-from aspose.slides import Presentation, SaveFormat
-import uuid
 import time
+import gc
+from flask import Flask, request, jsonify, send_from_directory
+import aspose.slides as slides
 
 app = Flask(__name__)
 
-# Geçici dosyalar için klasör
-UPLOAD_FOLDER = "static"
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+PROJECT_DIR = os.path.join(BASE_DIR, "project")
+
+os.makedirs(STATIC_DIR, exist_ok=True)
+os.makedirs(PROJECT_DIR, exist_ok=True)
+
+@app.route("/")
+def home():
+    return "API Online ve Calisiyor!"
 
 @app.route("/merge", methods=["POST"])
+@app.route("/merge", methods=["POST"])
 def merge_pptx():
-    temp_files = []
     main_pres = None
-    
     try:
-        # 1. DOSYALARI YAKALAMA (En sağlam yöntem)
-        files = []
-        for key in request.files:
-            files.extend(request.files.getlist(key))
+        files = request.files.getlist("files")
+        if not files or len(files) < 2:
+            return jsonify({"error": "En az 2 dosya gerekli"}), 400
+        first_file = files[0]
+        first_path = os.path.join(PROJECT_DIR, first_file.filename)
+        first_file.save(first_path)
         
-        # Log: Gelen dosya sayısını kontrol et
-        print(f"DEBUG: Gelen dosya sayısı: {len(files)}")
-
-        if len(files) < 2:
-            return jsonify({
-                "error": f"En az 2 dosya gerekli. Sunucuya ulaşan dosya sayısı: {len(files)}",
-                "debug_info": "Eğer 0 ise Query Record sonucunu kontrol edin."
-            }), 400
-
-        # 2. DOSYALARI KAYDETME
-        for file in files:
-            if file.filename == '': continue
-            path = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}_{file.filename}")
-            file.save(path)
-            temp_files.append(path)
-
-        # 3. BİRLEŞTİRME İŞLEMİ
-        main_pres = Presentation(temp_files[0])
+        # Ana sunumu aç
+        main_pres = slides.Presentation(first_path)
         
-        for i in range(1, len(temp_files)):
-            with Presentation(temp_files[i]) as sub_pres:
-                for slide in sub_pres.slides:
-                    main_pres.slides.add_clone(slide)
-
-        # 4. KAYDETME
+        for f in files[1:]:
+            if f.filename:
+                temp_path = os.path.join(PROJECT_DIR, f.filename)
+                f.save(temp_path)
+                
+                with slides.Presentation(temp_path) as src_pres:
+                    for slide in src_pres.slides:
+                        main_pres.slides.add_clone(slide)
+                
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+        
         output_name = f"sunum_{int(time.time())}.pptx"
-        output_path = os.path.join(UPLOAD_FOLDER, output_name)
-        main_pres.save(output_path, SaveFormat.PPTX)
-
-        # Temiz bir URL oluştur (Render URL'sine göre)
-        # request.host_url otomatik olarak https://uygulama-adi.onrender.com/ verir
-        download_url = f"{request.host_url.rstrip('/')}/static/{output_name}"
+        save_path = os.path.join(STATIC_DIR, output_name)
+        main_pres.save(save_path, slides.export.SaveFormat.PPTX)
 
         return jsonify({
-            "message": "Başarılı",
-            "indir": download_url,
-            "dosya_sayisi": len(temp_files)
+            "status": "success",
+            "indir": f"https://{request.host}/static/{output_name}"
         }), 200
 
     except Exception as e:
-        print(f"HATA: {str(e)}")
-        return jsonify({"error": f"Sunucu hatası: {str(e)}"}), 500
-
+        print(f"Hata olustu: {str(e)}")
+        return jsonify({"error": str(e)}), 500
     finally:
-        # Bellek Temizliği (Dispose çok önemli!)
         if main_pres:
-            main_pres.dispose()
-        # Geçici indirilen dosyaları sil (Output hariç)
-        for f in temp_files:
-            if os.path.exists(f):
-                os.remove(f)
+            try:
+                main_pres.dispose() # del yerine dispose() kullanmaya çalış
+            except:
+                pass
+            del main_pres
+        gc.collect() # Belleği temizlemeye zorla
 
-@app.route('/static/<path:filename>')
-def download_file(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename)
+@app.route('/static/<path:path>')
+def send_static(path):
+    return send_from_directory(STATIC_DIR, path)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
