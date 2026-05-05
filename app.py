@@ -1,68 +1,74 @@
-import os, requests, uuid, time
+import os
+import time
+import gc
 from flask import Flask, request, jsonify, send_from_directory
-import aspose.slides as slides  # Import şeklini değiştirdik
+import aspose.slides as slides
 
 app = Flask(__name__)
-UPLOAD_FOLDER = "static"
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+PROJECT_DIR = os.path.join(BASE_DIR, "project")
+
+os.makedirs(STATIC_DIR, exist_ok=True)
+os.makedirs(PROJECT_DIR, exist_ok=True)
+
+@app.route("/")
+def home():
+    return "API Online ve Calisiyor!"
 
 @app.route("/merge", methods=["POST"])
+@app.route("/merge", methods=["POST"])
 def merge_pptx():
-    temp_files = []
     main_pres = None
     try:
-        data = request.json 
-        urls = []
-
-        if isinstance(data, list):
-            for record in data:
-                sunumlar = record.get('sunumlar', [])
-                if isinstance(sunumlar, list):
-                    for s in sunumlar:
-                        if isinstance(s, dict) and s.get('url'):
-                            urls.append(s['url'])
+        files = request.files.getlist("files")
+        if not files or len(files) < 2:
+            return jsonify({"error": "En az 2 dosya gerekli"}), 400
+        first_file = files[0]
+        first_path = os.path.join(PROJECT_DIR, first_file.filename)
+        first_file.save(first_path)
         
-        if len(urls) < 2:
-            return jsonify({"error": f"En az 2 dosya lazım. Sistem {len(urls)} dosya bulabildi."}), 400
-
-        for url in urls:
-            r = requests.get(url.strip())
-            if r.status_code == 200:
-                p = os.path.join(UPLOAD_FOLDER, f"{uuid.uuid4()}.pptx")
-                with open(p, 'wb') as f:
-                    f.write(r.content)
-                temp_files.append(p)
-
-        # Birleştirme işlemi - Yeni kütüphane formatına göre düzenlendi
-        main_pres = slides.Presentation(temp_files[0])
-        for i in range(1, len(temp_files)):
-            with slides.Presentation(temp_files[i]) as sub:
-                for slide in sub.slides:
-                    main_pres.slides.add_clone(slide)
-
-        out_name = f"sunum_{int(time.time())}.pptx"
-        out_path = os.path.join(UPLOAD_FOLDER, out_name)
-        # SaveFormat'ı slides modülü üzerinden çağırdık
-        main_pres.save(out_path, slides.export.SaveFormat.PPTX)
+        # Ana sunumu aç
+        main_pres = slides.Presentation(first_path)
+        
+        for f in files[1:]:
+            if f.filename:
+                temp_path = os.path.join(PROJECT_DIR, f.filename)
+                f.save(temp_path)
+                
+                with slides.Presentation(temp_path) as src_pres:
+                    for slide in src_pres.slides:
+                        main_pres.slides.add_clone(slide)
+                
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+        
+        output_name = f"sunum_{int(time.time())}.pptx"
+        save_path = os.path.join(STATIC_DIR, output_name)
+        main_pres.save(save_path, slides.export.SaveFormat.PPTX)
 
         return jsonify({
-            "message": "Başarılı",
-            "indir": f"{request.host_url.rstrip('/')}/static/{out_name}"
+            "status": "success",
+            "indir": f"https://{request.host}/static/{output_name}"
         }), 200
 
     except Exception as e:
-        return jsonify({"error": f"Sunucu hatası: {str(e)}"}), 500
+        print(f"Hata olustu: {str(e)}")
+        return jsonify({"error": str(e)}), 500
     finally:
         if main_pres:
-            main_pres.dispose()
-        for f in temp_files:
-            if os.path.exists(f):
-                os.remove(f)
+            try:
+                main_pres.dispose() # del yerine dispose() kullanmaya çalış
+            except:
+                pass
+            del main_pres
+        gc.collect() # Belleği temizlemeye zorla
 
-@app.route('/static/<path:filename>')
-def download(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename)
+@app.route('/static/<path:path>')
+def send_static(path):
+    return send_from_directory(STATIC_DIR, path)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
