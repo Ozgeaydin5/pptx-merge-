@@ -18,12 +18,22 @@ def home():
     return "API Online ve Calisiyor!"
 
 @app.route("/merge", methods=["POST"])
+@app.route("/merge", methods=["POST"])
 def merge_pptx():
-    main_pres = None
-    try:
-        files = request.files.getlist("files")
-        if not files or len(files) < 2:
-            return jsonify({"error": "En az 2 dosya gerekli"}), 400
+    # Gelen tüm dosyaları yakalamaya çalış (farklı anahtar isimleri olsa bile)
+    files = []
+    for key in request.files:
+        files.extend(request.files.getlist(key))
+    
+    # Hata ayıklama için: Render loglarında ne geldiğini görelim
+    print(f"Gelen dosya sayısı: {len(files)}")
+    for f in files:
+        print(f"Dosya adı: {f.filename}")
+
+    if len(files) < 2:
+        return jsonify({"error": f"En az 2 dosya gerekli. Sunucuya ulaşan dosya sayısı: {len(files)}"}), 400
+
+    # ... (Geri kalan birleştirme kodların aynı kalsın)
 
         first_file = files[0]
         first_path = os.path.join(PROJECT_DIR, first_file.filename)
